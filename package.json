@@ -1,8 +1,15 @@
 {
   "name": "pi-dial",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi provider extension for DIAL Core",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pgciq/pi-dial"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
     "extensions",
     "README.md"
