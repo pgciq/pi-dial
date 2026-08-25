@@ -1,0 +1,13 @@
+{
+  "name": "pi-dial",
+  "version": "0.1.0",
+  "description": "Pi provider extension for DIAL Core",
+  "license": "MIT",
+  "files": ["extensions", "README.md"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
