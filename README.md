@@ -31,6 +31,18 @@ export DIAL_MODEL="gpt-4o"
 
 The API key is sent in the DIAL-specific `Api-Key` header. Model IDs are deployment names returned by DIAL and may differ from the upstream model names.
 
+## Startup & model discovery (non-blocking)
+
+The provider registers immediately with the seed/fallback list (`DIAL_MODELS` / `DIAL_MODEL`, or empty) so pi is usable the instant the extension loads — it never blocks startup waiting for `GET /openai/models`.
+
+Live model discovery runs **in the background** via pi's `refreshModels` callback:
+
+- pi's cache-only startup phase (or a cancelled refresh) returns the already-known list without touching the network.
+- When network is allowed, `GET /openai/models` is fetched with an 8s per-request timeout; on success the discovered list is persisted to pi's provider cache (`publish({ persist })`) and hot-swaps the catalog.
+- On failure it keeps the previous list, so the user is never left without models.
+
+`DIAL_API_KEY` is required for discovery; without it (or with `DIAL_MODELS` set) the seed list is used directly.
+
 ## Install locally
 
 From this directory:
