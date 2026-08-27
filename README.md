@@ -62,6 +62,11 @@ At request time a single provider-level `streamSimple` inspects these flags and 
 
 So, for example, `pi --model dial/<image-deployment>` generates an image, while `pi --model dial/<vision-deployment>` can be shown images inline.
 
+## Commands
+
+- `/dial-prices [input|output|total|context] [desc]` — list DIAL model prices per 1M tokens (sorted; `desc` reverses).
+- `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities image` shows only image-generation deployments.
+
 ## Install locally
 
 From this directory:

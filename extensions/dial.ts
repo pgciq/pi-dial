@@ -456,6 +456,7 @@ export default function (pi) {
   }
 
   registerPricesCommand(pi);
+  registerCapabilitiesCommand(pi);
   registerUsageStatusBar(pi);
 }
 
@@ -565,6 +566,71 @@ function registerPricesCommand(pi) {
   });
 
   pi.registerEntryRenderer("dial-prices", (entry) => {
+    const mdTheme = getMarkdownTheme();
+    return new Markdown(entry.data.markdown, 1, 0, mdTheme);
+  });
+}
+
+function registerCapabilitiesCommand(pi) {
+  const flags = {
+    reasoning: "reasoning",
+    vision: "vision",
+    image: "image",
+    video: "video",
+    audio: "audio",
+    tools: "tools",
+  };
+
+  pi.registerCommand("dial-capabilities", {
+    description:
+      "List DIAL deployment capabilities (vision/image/video/audio/tools/reasoning); e.g. /dial-capabilities image",
+    handler: async (args, ctx) => {
+      const tokens = (args || "").trim().split(/\s+/).filter(Boolean);
+      const filter = tokens.find((token) => token in flags);
+      const models = ctx.modelRegistry.getAvailable().filter((model) => model.provider === PROVIDER_ID);
+
+      const rows = models
+        .map((model) => {
+          const caps = model.capabilities ?? {};
+          const dialCaps = model.dialCaps ?? {};
+          return {
+            id: model.id,
+            type: model.dialType ?? (dialCaps.chat ? "chat" : "?"),
+            reasoning: caps.reasoning ? "✓" : "",
+            vision: caps.vision ? "✓" : "",
+            image: caps.image ? "✓" : "",
+            video: caps.video ? "✓" : "",
+            audio: caps.audio ? "✓" : "",
+            tools: caps.tools ? "✓" : "",
+          };
+        })
+        .filter((row) => !filter || row[flags[filter]] === "✓")
+        .sort((a, b) => (a.type === b.type ? a.id.localeCompare(b.id) : a.type.localeCompare(b.type)));
+
+      const markdown = [
+        `# DIAL deployment capabilities${filter ? ` (filter: ${filter})` : ""}`,
+        "",
+        "| Model | Type | Reasoning | Vision | Image | Video | Audio | Tools |",
+        "|---|---|:---:|:---:|:---:|:---:|:---:|:---:|",
+        ...rows.map(
+          (row) =>
+            `| ${row.id} | ${row.type} | ${row.reasoning || "—"} | ${row.vision || "—"} | ${row.image || "—"} | ${row.video || "—"} | ${row.audio || "—"} | ${row.tools || "—"} |`,
+        ),
+        "",
+        "_Capabilities are read from each deployment's DIAL model metadata (type / features / capabilities / modalities)._",
+      ].join("\n");
+
+      if (ctx.mode === "tui") {
+        pi.appendEntry("dial-capabilities", { markdown });
+      } else if (ctx.hasUI) {
+        ctx.ui.notify(markdown, "info");
+      } else {
+        console.log(markdown);
+      }
+    },
+  });
+
+  pi.registerEntryRenderer("dial-capabilities", (entry) => {
     const mdTheme = getMarkdownTheme();
     return new Markdown(entry.data.markdown, 1, 0, mdTheme);
   });
