@@ -45,6 +45,23 @@ Live model discovery runs **in the background** via pi's `refreshModels` callbac
 
 **About large catalogs (100+ deployments):** discovery is a *single* `GET /openai/models` call — all deployments arrive in one response, so it is one fast, 8s-capped request, not 100 sequential ones. On the **first** run with no cache the catalog fills in that one background call; the result is then persisted to pi's provider cache, so **every subsequent start shows all 100+ models instantly** (from cache) and only re-validates in the background. If you pick a `dial/*` model in the brief first-run window before discovery finishes, set `DIAL_MODELS` for your common deployments (instant, no network needed) or just run `/reload` a moment later.
 
+## Per-model capabilities (vision / image / video)
+
+Each deployment is registered with the capabilities DIAL actually reports for it, read from the model item's `type`, `features`, `capabilities`, and `input_modalities` / `output_modalities`. The catalog entry carries:
+
+- `reasoning` — extended-thinking models.
+- `input: ["text", "image"]` — vision-capable deployments accept images as input.
+- a `capabilities` block (`tools`, `vision`, `image`, `video`, `audio`, `reasoning`) surfaced in `/list-models`.
+
+At request time a single provider-level `streamSimple` inspects these flags and routes to the right endpoint:
+
+- **Chat / completion deployments** → `POST /openai/deployments/{name}/chat/completions` (OpenAI completions).
+- **Image-generation deployments** (`type: "image"`, or `image` in `output_modalities`/`capabilities`/`features`) → `POST /openai/images/generations` (or `/openai/images/edits` when the prompt includes reference images). The generated image is saved under `.pi/generated-images/` and its URL is returned.
+- **Video-generation deployments** → `POST /openai/videos/generations` (best-effort; DIAL's video endpoint shape varies — adjust the endpoint/body if your instance differs).
+- Non-chat, non-image, non-video deployments (embedding/moderation/audio/…) are registered for visibility but return a clear “not streamed by this extension” error if selected.
+
+So, for example, `pi --model dial/<image-deployment>` generates an image, while `pi --model dial/<vision-deployment>` can be shown images inline.
+
 ## Install locally
 
 From this directory:
