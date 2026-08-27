@@ -43,6 +43,8 @@ Live model discovery runs **in the background** via pi's `refreshModels` callbac
 
 `DIAL_API_KEY` is required for discovery; without it (or with `DIAL_MODELS` set) the seed list is used directly.
 
+**About large catalogs (100+ deployments):** discovery is a *single* `GET /openai/models` call — all deployments arrive in one response, so it is one fast, 8s-capped request, not 100 sequential ones. On the **first** run with no cache the catalog fills in that one background call; the result is then persisted to pi's provider cache, so **every subsequent start shows all 100+ models instantly** (from cache) and only re-validates in the background. If you pick a `dial/*` model in the brief first-run window before discovery finishes, set `DIAL_MODELS` for your common deployments (instant, no network needed) or just run `/reload` a moment later.
+
 ## Install locally
 
 From this directory:

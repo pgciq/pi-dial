@@ -149,6 +149,9 @@ export default function (pi) {
       const apiKey = credential?.key ?? process.env.DIAL_API_KEY ?? "";
       if (!apiKey) return cached?.length ? cached : seed;
 
+      // Single GET /openai/models call returns all deployments (100+ in one
+      // response) — fast, and the result is cached for instant startup next time.
+      console.error(`[dial] Discovering model catalog from ${baseUrl}/openai/models ...`);
       try {
         const discovered = await discoverModels(baseUrl, apiKey, signal);
         if (discovered.length > 0) {
@@ -162,8 +165,14 @@ export default function (pi) {
     },
   });
 
+  const seed = fallbackModels(baseUrl);
   if (!process.env.DIAL_API_KEY) {
-    console.error("[dial] DIAL_API_KEY is not set. Discovery is skipped; set it (or DIAL_MODELS) before selecting a dial/* model.");
+    console.error("[dial] DIAL_API_KEY is not set — discovery skipped. Set it, or set DIAL_MODELS/DIAL_MODEL, before selecting a dial/* model.");
+  } else if (seed.length === 0) {
+    // Key is present but no seed and no cached catalog yet: the background
+    // discovery (single fast /openai/models call) will fill the catalog and
+    // cache it. Surface this so an immediate model pick doesn't just error.
+    console.error("[dial] No DIAL_MODELS/DIAL_MODEL set and no cached catalog yet — discovering the full list from /openai/models in the background (cached afterwards for instant startup). Need a model right now? Set DIAL_MODELS or run /reload in a moment.");
   }
 
   registerPricesCommand(pi);
