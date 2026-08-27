@@ -14,8 +14,6 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 
 // `openAICompletionsApi` lives on the bare `@earendil-works/pi-ai` export in
 // older pi-ai builds but moved to the `@earendil-works/pi-ai/api/openai-completions.lazy`
@@ -92,21 +90,27 @@ function detectCapabilities(item: any) {
   const supportsImageGen = flag("image") || outputModalities.includes("image") || type === "image";
   const supportsVideo = flag("video") || outputModalities.includes("video") || type === "video";
   const supportsAudio = flag("audio") || inputModalities.includes("audio") || outputModalities.includes("audio");
-  const supportsTools = flag("tools", "tool_use", "function_calling", "chat_completion");
+  let supportsTools = flag("tools", "tool_use", "function_calling", "chat_completion");
   const supportsReasoning =
     flag("reasoning") ||
     item?.reasoning === true ||
     item?.supports_reasoning === true ||
     (Array.isArray(capsObj?.reasoning_effort) && capsObj.reasoning_effort.length > 0);
 
-  const nonChat = ["embedding", "moderation", "audio", "file", "ranker"];
-  const isChat =
-    type === "chat" || type === "text" || type === "code" || type === "completion" || type === ""
+  // DIAL Core's capabilities object uses chat_completion / completion /
+  // embeddings keys (not generic image/video/tools). Honor those too.
+  const dc = capsObj ?? {};
+  const isEmbedding = type === "embedding" || dc.embeddings === true;
+  const isChatModel =
+    type === "chat" || type === "completion" || type === "text" || type === "code" || type === ""
       ? true
-      : !nonChat.some((t) => type.startsWith(t)) && !supportsImageGen && !supportsVideo;
+      : dc.chat_completion === true || dc.completion === true;
+  const isChat = isChatModel && !isEmbedding && !supportsImageGen && !supportsVideo;
+  // DIAL chat_completion deployments support tool/function calling.
+  if (isChatModel && !isEmbedding) supportsTools = true;
 
   return {
-    type: type || "chat",
+    type: type || (isEmbedding ? "embedding" : "chat"),
     isChat,
     supportsImageInput,
     supportsImageGen,
@@ -133,7 +137,7 @@ function modelFromItem(item: any, baseUrl: string) {
 
   return {
     id,
-    name: item?.display_name ?? item?.displayName ?? item?.name ?? id,
+    name: item?.display_name?.plainValue ?? item?.display_name ?? item?.displayName ?? item?.name ?? id,
     api: "openai-completions",
     baseUrl: deploymentUrl(baseUrl, id),
     reasoning: caps.supportsReasoning,
@@ -203,51 +207,13 @@ function withTimeout(signal, ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Capability-aware streaming (vision / image / video generation)
+// Capability-aware streaming
 // ---------------------------------------------------------------------------
-// Mirrors the SenseNova image pattern: a single provider-level streamSimple
-// inspects each model's dialCaps and routes image/video deployments to DIAL's
-// OpenAI-compatible generation endpoints instead of the chat completions path.
-
-function latestUserContent(context: any) {
-  const messages = Array.isArray(context?.messages) ? context.messages : [];
-  return [...messages].reverse().find((message) => message?.role === "user");
-}
-
-function latestTextPrompt(context: any) {
-  const user = latestUserContent(context);
-  if (!user) return "";
-  if (typeof user.content === "string") return user.content;
-  return (user.content ?? [])
-    .filter((part: any) => part?.type === "text")
-    .map((part: any) => part.text ?? "")
-    .join("\n");
-}
-
-function latestReferenceImages(context: any) {
-  const user = latestUserContent(context);
-  if (!user || typeof user.content === "string") return [];
-  return (user.content ?? []).filter((part: any) => part?.type === "image");
-}
-
-async function saveGeneratedImage(image: any, modelId: string) {
-  const directory = join(process.cwd(), ".pi", "generated-images");
-  await mkdir(directory, { recursive: true });
-  const mime = image?.mime_type ?? image?.mimeType ?? "image/png";
-  const extension = mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : "png";
-  const filename = `${modelId}-${Date.now()}.${extension}`;
-  const filePath = join(directory, filename);
-  if (image?.b64_json) {
-    await writeFile(filePath, Buffer.from(image.b64_json, "base64"));
-  } else if (image?.url) {
-    const download = await fetch(image.url);
-    if (!download.ok) throw new Error(`Unable to download generated image: HTTP ${download.status}`);
-    await writeFile(filePath, Buffer.from(await download.arrayBuffer()));
-  } else {
-    throw new Error("Image API returned neither url nor b64_json");
-  }
-  return filePath;
-}
+// DIAL Core (https://github.com/epam/ai-dial-core) exposes chat/completion/
+// embedding deployments plus the OpenAI Responses API and Anthropic Messages.
+// It does NOT expose any image/video *generation* endpoint, so this extension
+// only streams chat deployments and classifies capabilities from the catalog's
+// `capabilities` / `input_attachment_types` fields.
 
 function baseOutput(model: any, stopReason: string) {
   return {
@@ -265,99 +231,8 @@ function baseOutput(model: any, stopReason: string) {
   };
 }
 
-async function streamDialImageGeneration(model: any, context: any, options: any, baseUrl: string, apiKey: string) {
-  const stream = createAssistantMessageEventStream();
-  const output = baseOutput(model, "pending");
-  (async () => {
-    try {
-      stream.push({ type: "start", partial: output });
-      const prompt = latestTextPrompt(context);
-      if (!prompt) throw new Error("Image generation requires a text prompt");
-      const references = latestReferenceImages(context);
-      const endpoint = references.length
-        ? `${baseUrl}/openai/images/edits`
-        : `${baseUrl}/openai/images/generations`;
-      const body = references.length
-        ? {
-            model: model.id,
-            prompt,
-            images: references.map((image: any) => ({ image_url: `data:${image.mimeType};base64,${image.data}` })),
-            n: 1,
-            response_format: "url",
-          }
-        : { model: model.id, prompt, n: 1, response_format: "url" };
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Api-Key": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: options?.signal,
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error?.message ?? `DIAL image API HTTP ${response.status}`);
-      const image = payload?.data?.[0] ?? payload?.images?.[0];
-      if (!image) throw new Error("Image API returned no image data");
-      const filePath = await saveGeneratedImage(image, model.id);
-      const result = image.url
-        ? `![Generated image](${image.url})\n\nSaved local copy: ${filePath}\n\nImage URL: ${image.url}`
-        : `Generated image saved to: ${filePath}`;
-      output.content.push({ type: "text", text: result });
-      stream.push({ type: "text_start", contentIndex: 0, partial: output });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: result, partial: output });
-      stream.push({ type: "text_end", contentIndex: 0, content: result, partial: output });
-      output.stopReason = "stop";
-      stream.push({ type: "done", reason: "stop", message: output });
-      stream.end();
-    } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
-    }
-  })();
-  return stream;
-}
-
-// DIAL's video generation endpoint shape varies across deployments. This is a
-// best-effort OpenAI-compatible call; adjust the endpoint/body if your DIAL
-// instance exposes video generation differently.
-async function streamDialVideoGeneration(model: any, context: any, options: any, baseUrl: string, apiKey: string) {
-  const stream = createAssistantMessageEventStream();
-  const output = baseOutput(model, "pending");
-  (async () => {
-    try {
-      stream.push({ type: "start", partial: output });
-      const prompt = latestTextPrompt(context);
-      if (!prompt) throw new Error("Video generation requires a text prompt");
-      const endpoint = `${baseUrl}/openai/videos/generations`;
-      const body = { model: model.id, prompt, n: 1 };
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Api-Key": apiKey, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: options?.signal,
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error?.message ?? `DIAL video API HTTP ${response.status}`);
-      const video = payload?.data?.[0] ?? payload?.videos?.[0];
-      const url = video?.url ?? video?.b64_json;
-      if (!url) throw new Error("Video API returned no video data");
-      const result = `Generated video: ${url}`;
-      output.content.push({ type: "text", text: result });
-      stream.push({ type: "text_start", contentIndex: 0, partial: output });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: result, partial: output });
-      stream.push({ type: "text_end", contentIndex: 0, content: result, partial: output });
-      output.stopReason = "stop";
-      stream.push({ type: "done", reason: "stop", message: output });
-      stream.end();
-    } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
-    }
-  })();
-  return stream;
-}
+// DIAL Core has no image/video generation endpoint, so no generation routing
+// is implemented here; the image/video generation capability flags stay false.
 
 async function discoverModels(baseUrl: string, apiKey: string, signal?: AbortSignal) {
   const response = await fetch(`${baseUrl}/openai/models`, {
@@ -381,18 +256,16 @@ export default function (pi) {
   // everything else uses the OpenAI chat completions stream.
   function streamDial(model: any, context: any, options?: any) {
     const caps = model?.dialCaps ?? {};
-    if (caps.imageGen) return streamDialImageGeneration(model, context, options, baseUrl, process.env.DIAL_API_KEY ?? "");
-    if (caps.video) return streamDialVideoGeneration(model, context, options, baseUrl, process.env.DIAL_API_KEY ?? "");
     if (caps.chat) return openAICompletionsApi().streamSimple(model, context, options);
-    // Non-chat, non-image, non-video deployment (embedding/moderation/audio/...):
-    // this extension only streams chat + image/video, so say so clearly.
+    // Non-chat deployment (embedding/...): DIAL Core's API only streams chat /
+    // completion / embedding models, so say so clearly rather than 404.
     const stream = createAssistantMessageEventStream();
     const output = baseOutput(model, "pending");
     (async () => {
       try {
         stream.push({ type: "start", partial: output });
         throw new Error(
-          `DIAL deployment "${model?.id}" is type "${model?.dialType ?? "unknown"}", which this extension does not stream (use a chat or image deployment).`,
+          `DIAL deployment "${model?.id}" is type "${model?.dialType ?? "unknown"}", which this extension does not stream (use a chat/completion deployment).`,
         );
       } catch (error) {
         output.stopReason = "error";

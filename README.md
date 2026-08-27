@@ -45,27 +45,25 @@ Live model discovery runs **in the background** via pi's `refreshModels` callbac
 
 **About large catalogs (100+ deployments):** discovery is a *single* `GET /openai/models` call — all deployments arrive in one response, so it is one fast, 8s-capped request, not 100 sequential ones. On the **first** run with no cache the catalog fills in that one background call; the result is then persisted to pi's provider cache, so **every subsequent start shows all 100+ models instantly** (from cache) and only re-validates in the background. If you pick a `dial/*` model in the brief first-run window before discovery finishes, set `DIAL_MODELS` for your common deployments (instant, no network needed) or just run `/reload` a moment later.
 
-## Per-model capabilities (vision / image / video)
+## What DIAL Core exposes (capabilities)
 
-Each deployment is registered with the capabilities DIAL actually reports for it, read from the model item's `type`, `features`, `capabilities`, and `input_modalities` / `output_modalities`. The catalog entry carries:
+This extension targets **DIAL Core** (`epam/ai-dial-core`). Per its OpenAPI spec the catalog API (`GET /openai/models`) returns deployments whose `ModelType` is only `CHAT` / `COMPLETION` / `EMBEDDING`, with a `capabilities` object of booleans (`chat_completion`, `completions`, `embeddings`, `fine_tune`, `inference`) and — for chat deployments — `input_attachment_types` (e.g. `image/*`). **DIAL Core has no image-generation or video-generation endpoint**, so this extension does **not** implement image/video generation routing (the capability flags for those stay `false`).
 
-- `reasoning` — extended-thinking models.
-- `input: ["text", "image"]` — vision-capable deployments accept images as input.
-- a `capabilities` block (`tools`, `vision`, `image`, `video`, `audio`, `reasoning`) surfaced in `/list-models`.
+Each deployment is registered with the capabilities DIAL actually reports, read from the model item's `type` / `ModelType`, `capabilities`, `input_attachment_types`, and `input_modalities` / `output_modalities` (the detection tolerates all of these schema variants). The catalog entry carries:
 
-At request time a single provider-level `streamSimple` inspects these flags and routes to the right endpoint:
+- `reasoning` — extended-thinking models (reported via `reasoning`/`supports_reasoning`/`reasoning_effort`).
+- `input: ["text"]` or `input: ["text", "image"]` — vision-capable deployments accept images as input (from `input_attachment_types` / `input_modalities`).
+- a `capabilities` block (`tools` ← `chat_completion`, `vision` ← image input, `image`, `video`, `audio`, `reasoning`) surfaced in `/list-models`.
+- `display_name` is read from the `{ plainValue: "…" }` object DIAL returns.
 
-- **Chat / completion deployments** → `POST /openai/deployments/{name}/chat/completions` (OpenAI completions).
-- **Image-generation deployments** (`type: "image"`, or `image` in `output_modalities`/`capabilities`/`features`) → `POST /openai/images/generations` (or `/openai/images/edits` when the prompt includes reference images). The generated image is saved under `.pi/generated-images/` and its URL is returned.
-- **Video-generation deployments** → `POST /openai/videos/generations` (best-effort; DIAL's video endpoint shape varies — adjust the endpoint/body if your instance differs).
-- Non-chat, non-image, non-video deployments (embedding/moderation/audio/…) are registered for visibility but return a clear “not streamed by this extension” error if selected.
+At request time a single provider-level `streamSimple` routes only chat deployments to `POST /openai/deployments/{name}/chat/completions` (OpenAI completions). Non-chat deployments (embedding/…) are registered for visibility but return a clear “not streamed by this extension” error if selected.
 
-So, for example, `pi --model dial/<image-deployment>` generates an image, while `pi --model dial/<vision-deployment>` can be shown images inline.
+So `pi --model dial/<vision-deployment>` can be shown images inline, while image/video *generation* is not supported by DIAL Core and is therefore not routed.
 
 ## Commands
 
 - `/dial-prices [input|output|total|context] [desc]` — list DIAL model prices per 1M tokens (sorted; `desc` reverses).
-- `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities image` shows only image-generation deployments.
+- `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities vision` shows only vision-capable deployments.
 
 ## Install locally
 
