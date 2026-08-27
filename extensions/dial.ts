@@ -96,10 +96,25 @@ function fallbackModels(baseUrl: string) {
     .map((id) => modelFromItem({ id }, baseUrl));
 }
 
-async function discoverModels(baseUrl: string, apiKey: string) {
+// Merge an optional external abort signal with a hard per-call timeout so a slow
+// DIAL endpoint can never hang model discovery (and thus Pi startup).
+function withTimeout(signal, ms) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  const clear = () => clearTimeout(timer);
+  ac.signal.addEventListener("abort", clear, { once: true });
+  if (signal) {
+    if (signal.aborted) ac.abort();
+    else signal.addEventListener("abort", () => ac.abort(), { once: true });
+  }
+  return ac.signal;
+}
+
+async function discoverModels(baseUrl: string, apiKey: string, signal?: AbortSignal) {
   const response = await fetch(`${baseUrl}/openai/models`, {
     headers: { "Api-Key": apiKey },
     redirect: "follow",
+    signal: withTimeout(signal, 8000),
   });
   if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
   const payload: any = await response.json();
@@ -109,22 +124,12 @@ async function discoverModels(baseUrl: string, apiKey: string) {
     .filter((model) => model.id);
 }
 
-export default async function (pi) {
+export default function (pi) {
   const baseUrl = cleanBaseUrl(process.env.DIAL_BASE_URL || DEFAULT_BASE_URL);
-  const apiKey = process.env.DIAL_API_KEY || "";
-  let models = fallbackModels(baseUrl);
 
-  if (apiKey) {
-    try {
-      const discovered = await discoverModels(baseUrl, apiKey);
-      if (discovered.length > 0) models = discovered;
-    } catch (error) {
-      console.error(`[dial] Model discovery failed (${error instanceof Error ? error.message : String(error)}). Using DIAL_MODELS/DIAL_MODEL.`);
-    }
-  } else {
-    console.error("[dial] DIAL_API_KEY is not set. Set it before selecting a dial/* model.");
-  }
-
+  // Register immediately with the seed/fallback list (DIAL_MODELS/DIAL_MODEL or
+  // empty) so Pi is usable the instant the extension loads. Live model discovery
+  // runs in the background via refreshModels and never blocks startup.
   pi.registerProvider(PROVIDER_ID, {
     name: "DIAL",
     // The actual endpoint is model-specific; this value is used only as a fallback.
@@ -132,8 +137,34 @@ export default async function (pi) {
     api: "openai-completions",
     apiKey: "$DIAL_API_KEY",
     headers: { "Api-Key": "$DIAL_API_KEY" },
-    models,
+    models: fallbackModels(baseUrl),
+
+    async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
+      const cached = Array.isArray(stored?.models) ? stored.models : undefined;
+      const seed = fallbackModels(baseUrl);
+      // Pi's cache-only startup phase, or a cancelled refresh: return what we
+      // already have without touching the network.
+      if (allowNetwork === false || signal?.aborted) return cached?.length ? cached : seed;
+
+      const apiKey = credential?.key ?? process.env.DIAL_API_KEY ?? "";
+      if (!apiKey) return cached?.length ? cached : seed;
+
+      try {
+        const discovered = await discoverModels(baseUrl, apiKey, signal);
+        if (discovered.length > 0) {
+          await publish({ persist: { provider: PROVIDER_ID, models: discovered } });
+          return discovered;
+        }
+      } catch (error) {
+        console.error(`[dial] Model discovery failed (${error instanceof Error ? error.message : String(error)}). Keeping previous list.`);
+      }
+      return cached?.length ? cached : seed;
+    },
   });
+
+  if (!process.env.DIAL_API_KEY) {
+    console.error("[dial] DIAL_API_KEY is not set. Discovery is skipped; set it (or DIAL_MODELS) before selecting a dial/* model.");
+  }
 
   registerPricesCommand(pi);
   registerUsageStatusBar(pi);
