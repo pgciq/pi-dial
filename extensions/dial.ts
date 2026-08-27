@@ -40,8 +40,19 @@ function modelFromItem(item: any, baseUrl: string) {
   const maxTokens = Number(
     item?.max_tokens ?? item?.maxTokens ?? limits.maxCompletionTokens ?? Math.min(contextWindow, 16_384),
   );
-  const supportsVision = item?.input_modalities?.includes?.("image") || item?.vision === true;
-  const reasoning = item?.reasoning === true || item?.supports_reasoning === true;
+  const attachmentTypes = Array.isArray(item?.input_attachment_types)
+    ? item.input_attachment_types
+    : [];
+  const supportsVision =
+    item?.input_modalities?.includes?.("image") ||
+    attachmentTypes.some((type: unknown) => typeof type === "string" && /^image\//i.test(type)) ||
+    item?.vision === true ||
+    item?.supports_vision === true ||
+    item?.features?.content_parts === true;
+  const reasoning =
+    item?.reasoning === true ||
+    item?.supports_reasoning === true ||
+    (Array.isArray(item?.features?.reasoning_efforts) && item.features.reasoning_efforts.length > 0);
 
   return {
     id,
@@ -64,6 +75,14 @@ function modelFromItem(item: any, baseUrl: string) {
       maxTokensField: "max_tokens",
       supportsDeveloperRole: false,
       supportsStore: false,
+    },
+    // Preserve capability data for future endpoint routing without exposing
+    // the entire DIAL model object to Pi's model registry.
+    dialCapabilities: {
+      chatCompletion: item?.features?.chat_completion ?? item?.capabilities?.chat_completion,
+      responsesApi: item?.features?.responses_api ?? item?.capabilities?.responses_api,
+      contentParts: item?.features?.content_parts,
+      inputAttachmentTypes: attachmentTypes,
     },
   };
 }
