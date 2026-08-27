@@ -1,6 +1,6 @@
 {
   "name": "pi-dial",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Pi provider extension for DIAL Core",
   "license": "MIT",
   "repository": {
