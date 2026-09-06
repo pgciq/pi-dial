@@ -256,7 +256,15 @@ export default function (pi) {
   // everything else uses the OpenAI chat completions stream.
   function streamDial(model: any, context: any, options?: any) {
     const caps = model?.dialCaps ?? {};
-    if (caps.chat) return openAICompletionsApi().streamSimple(model, context, options);
+    if (caps.chat) {
+      // The OpenAI client derives an `Authorization: Bearer` header from `apiKey`.
+      // This provider uses DIAL API-key authentication via `Api-Key`; DIAL reserves
+      // `Authorization: Bearer` for OAuth tokens, so remove the generated header.
+      return openAICompletionsApi().streamSimple(model, context, {
+        ...options,
+        headers: { ...options?.headers, Authorization: null },
+      });
+    }
     // Non-chat deployment (embedding/...): DIAL Core's API only streams chat /
     // completion / embedding models, so say so clearly rather than 404.
     const stream = createAssistantMessageEventStream();
