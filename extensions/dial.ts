@@ -199,18 +199,12 @@ function fallbackModels(baseUrl: string) {
     .map((id) => modelFromItem({ id }, baseUrl));
 }
 
-// Merge an optional external abort signal with a hard per-call timeout so a slow
-// DIAL endpoint can never hang model discovery (and thus Pi startup).
+// Merge an optional external abort signal with a hard per-call timeout. Native
+// timeout signals do not leave a ref'ed timer keeping short-lived Pi commands
+// alive after a successful discovery request.
 function withTimeout(signal, ms) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
-  const clear = () => clearTimeout(timer);
-  ac.signal.addEventListener("abort", clear, { once: true });
-  if (signal) {
-    if (signal.aborted) ac.abort();
-    else signal.addEventListener("abort", () => ac.abort(), { once: true });
-  }
-  return ac.signal;
+  const timeout = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 // ---------------------------------------------------------------------------
