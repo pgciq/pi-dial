@@ -90,7 +90,13 @@ function detectCapabilities(item: any) {
   const supportsImageGen = flag("image") || outputModalities.includes("image") || type === "image";
   const supportsVideo = flag("video") || outputModalities.includes("video") || type === "video";
   const supportsAudio = flag("audio") || inputModalities.includes("audio") || outputModalities.includes("audio");
-  let supportsTools = flag("tools", "tool_use", "function_calling", "chat_completion");
+  const reportedToolSupport =
+    rawFeatures && !Array.isArray(rawFeatures) && typeof rawFeatures.tools === "boolean"
+      ? rawFeatures.tools
+      : typeof capsObj.tools === "boolean"
+        ? capsObj.tools
+        : undefined;
+  let supportsTools = reportedToolSupport ?? flag("tools", "tool_use", "function_calling");
   const supportsReasoning =
     flag("reasoning") ||
     item?.reasoning === true ||
@@ -106,8 +112,9 @@ function detectCapabilities(item: any) {
       ? true
       : dc.chat_completion === true || dc.completion === true;
   const isChat = isChatModel && !isEmbedding && !supportsImageGen && !supportsVideo;
-  // DIAL chat_completion deployments support tool/function calling.
-  if (isChatModel && !isEmbedding) supportsTools = true;
+  // Older catalogs do not advertise tool support. Preserve the historical
+  // fallback for those catalogs, but never override an explicit `tools: false`.
+  if (reportedToolSupport === undefined && isChatModel && !isEmbedding) supportsTools = true;
 
   return {
     type: type || (isEmbedding ? "embedding" : "chat"),
