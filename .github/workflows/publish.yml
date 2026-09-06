@@ -21,4 +21,9 @@ jobs:
 
       - run: npm install -g npm@latest
       - run: npm install
+      - run: npm test
+      - name: Verify tag matches package version
+        run: |
+          node -e 'const expected = `v${require("./package.json").version}`; if (process.env.GITHUB_REF_NAME !== expected) { console.error(`Expected tag ${expected}, received ${process.env.GITHUB_REF_NAME}`); process.exit(1); }'
+      - run: npm pack --dry-run
       - run: npm publish --access public --provenance
