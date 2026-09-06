@@ -19,7 +19,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - run: npm install
+      - run: npm install --ignore-scripts
       - run: npm test
       - name: Verify tag matches package version
         run: |
