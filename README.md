@@ -88,3 +88,15 @@ pi -e ./extensions/dial.ts
 ```
 
 Or add this directory/package to your pi configuration.
+
+## Development
+
+Requires Node.js 22.19 or newer.
+
+```bash
+npm install --ignore-scripts
+npm test
+npm pack --dry-run
+```
+
+The tests use Node's built-in test runner and make no DIAL requests.
