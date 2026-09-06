@@ -134,12 +134,24 @@ function modelFromItem(item: any, baseUrl: string) {
   const id = String(item?.id ?? item?.name ?? "");
   const caps = detectCapabilities(item);
   const limits = item?.limits ?? item?.capabilities ?? {};
+  const defaults = item?.defaults ?? {};
   const pricing = item?.pricing ?? {};
   const contextWindow = Number(
-    item?.context_window ?? item?.contextWindow ?? limits.maxTotalTokens ?? 128_000,
+    item?.context_window ??
+      item?.contextWindow ??
+      limits.max_total_tokens ??
+      limits.maxTotalTokens ??
+      limits.max_prompt_tokens ??
+      limits.maxPromptTokens ??
+      128_000,
   );
   const maxTokens = Number(
-    item?.max_tokens ?? item?.maxTokens ?? limits.maxCompletionTokens ?? Math.min(contextWindow, 16_384),
+    item?.max_tokens ??
+      item?.maxTokens ??
+      limits.max_completion_tokens ??
+      limits.maxCompletionTokens ??
+      defaults.max_tokens ??
+      Math.min(contextWindow, 16_384),
   );
 
   return {
