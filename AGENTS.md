@@ -19,7 +19,9 @@ Run the extension locally with:
 pi -e ./extensions/dial.ts
 ```
 
-The package has no build or test scripts. Keep changes focused on the provider behavior and preserve DIAL's deployment-specific URL format:
+The package has no build step. Install dependencies with `npm install --ignore-scripts`
+and run the regression suite with `npm test`. Keep changes focused on the provider
+behavior and preserve DIAL's deployment-specific URL format:
 
 ```text
 /openai/deployments/{deployment_name}/chat/completions

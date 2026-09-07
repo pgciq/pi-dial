@@ -65,7 +65,21 @@ So `pi --model dial/<vision-deployment>` can be shown images inline, while image
 - `/dial-prices [input|output|total|context] [desc]` — list DIAL model prices per 1M tokens (sorted; `desc` reverses).
 - `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities vision` shows only vision-capable deployments.
 
-## Install locally
+## Install
+
+Install the published package:
+
+```bash
+pi install npm:pi-dial
+```
+
+Or install directly from GitHub:
+
+```bash
+pi install git:github.com/pgciq/pi-dial
+```
+
+## Run from a local checkout
 
 From this directory:
 
@@ -74,3 +88,15 @@ pi -e ./extensions/dial.ts
 ```
 
 Or add this directory/package to your pi configuration.
+
+## Development
+
+Requires Node.js 22.19 or newer.
+
+```bash
+npm install --ignore-scripts
+npm test
+npm pack --dry-run
+```
+
+The tests use Node's built-in test runner and make no DIAL requests.

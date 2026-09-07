@@ -90,7 +90,13 @@ function detectCapabilities(item: any) {
   const supportsImageGen = flag("image") || outputModalities.includes("image") || type === "image";
   const supportsVideo = flag("video") || outputModalities.includes("video") || type === "video";
   const supportsAudio = flag("audio") || inputModalities.includes("audio") || outputModalities.includes("audio");
-  let supportsTools = flag("tools", "tool_use", "function_calling", "chat_completion");
+  const reportedToolSupport =
+    rawFeatures && !Array.isArray(rawFeatures) && typeof rawFeatures.tools === "boolean"
+      ? rawFeatures.tools
+      : typeof capsObj.tools === "boolean"
+        ? capsObj.tools
+        : undefined;
+  let supportsTools = reportedToolSupport ?? flag("tools", "tool_use", "function_calling");
   const supportsReasoning =
     flag("reasoning") ||
     item?.reasoning === true ||
@@ -106,8 +112,9 @@ function detectCapabilities(item: any) {
       ? true
       : dc.chat_completion === true || dc.completion === true;
   const isChat = isChatModel && !isEmbedding && !supportsImageGen && !supportsVideo;
-  // DIAL chat_completion deployments support tool/function calling.
-  if (isChatModel && !isEmbedding) supportsTools = true;
+  // Older catalogs do not advertise tool support. Preserve the historical
+  // fallback for those catalogs, but never override an explicit `tools: false`.
+  if (reportedToolSupport === undefined && isChatModel && !isEmbedding) supportsTools = true;
 
   return {
     type: type || (isEmbedding ? "embedding" : "chat"),
@@ -127,12 +134,24 @@ function modelFromItem(item: any, baseUrl: string) {
   const id = String(item?.id ?? item?.name ?? "");
   const caps = detectCapabilities(item);
   const limits = item?.limits ?? item?.capabilities ?? {};
+  const defaults = item?.defaults ?? {};
   const pricing = item?.pricing ?? {};
   const contextWindow = Number(
-    item?.context_window ?? item?.contextWindow ?? limits.maxTotalTokens ?? 128_000,
+    item?.context_window ??
+      item?.contextWindow ??
+      limits.max_total_tokens ??
+      limits.maxTotalTokens ??
+      limits.max_prompt_tokens ??
+      limits.maxPromptTokens ??
+      128_000,
   );
   const maxTokens = Number(
-    item?.max_tokens ?? item?.maxTokens ?? limits.maxCompletionTokens ?? Math.min(contextWindow, 16_384),
+    item?.max_tokens ??
+      item?.maxTokens ??
+      limits.max_completion_tokens ??
+      limits.maxCompletionTokens ??
+      defaults.max_tokens ??
+      Math.min(contextWindow, 16_384),
   );
 
   return {
@@ -192,18 +211,12 @@ function fallbackModels(baseUrl: string) {
     .map((id) => modelFromItem({ id }, baseUrl));
 }
 
-// Merge an optional external abort signal with a hard per-call timeout so a slow
-// DIAL endpoint can never hang model discovery (and thus Pi startup).
+// Merge an optional external abort signal with a hard per-call timeout. Native
+// timeout signals do not leave a ref'ed timer keeping short-lived Pi commands
+// alive after a successful discovery request.
 function withTimeout(signal, ms) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), ms);
-  const clear = () => clearTimeout(timer);
-  ac.signal.addEventListener("abort", clear, { once: true });
-  if (signal) {
-    if (signal.aborted) ac.abort();
-    else signal.addEventListener("abort", () => ac.abort(), { once: true });
-  }
-  return ac.signal;
+  const timeout = AbortSignal.timeout(ms);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +269,15 @@ export default function (pi) {
   // everything else uses the OpenAI chat completions stream.
   function streamDial(model: any, context: any, options?: any) {
     const caps = model?.dialCaps ?? {};
-    if (caps.chat) return openAICompletionsApi().streamSimple(model, context, options);
+    if (caps.chat) {
+      // The OpenAI client derives an `Authorization: Bearer` header from `apiKey`.
+      // This provider uses DIAL API-key authentication via `Api-Key`; DIAL reserves
+      // `Authorization: Bearer` for OAuth tokens, so remove the generated header.
+      return openAICompletionsApi().streamSimple(model, context, {
+        ...options,
+        headers: { ...options?.headers, Authorization: null },
+      });
+    }
     // Non-chat deployment (embedding/...): DIAL Core's API only streams chat /
     // completion / embedding models, so say so clearly rather than 404.
     const stream = createAssistantMessageEventStream();
