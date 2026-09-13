@@ -248,6 +248,35 @@ function baseOutput(model: any, stopReason: string) {
 // DIAL Core has no image/video generation endpoint, so no generation routing
 // is implemented here; the image/video generation capability flags stay false.
 
+function normalizeDiscoveredModels(models: any[]) {
+  // DIAL catalogs can contain repeated records for one deployment. A Pi model
+  // is keyed by id, so keep one record per deployment and avoid duplicate
+  // entries in the model picker.
+  const byId = new Map<string, any>();
+  for (const model of models) {
+    // Keep the first catalog record when DIAL repeats an id; a deployment id
+    // cannot safely represent multiple pricing/configuration records in Pi.
+    if (!byId.has(model.id)) byId.set(model.id, model);
+  }
+  const unique = [...byId.values()];
+  const names = new Map<string, any[]>();
+  for (const model of unique) {
+    const group = names.get(model.name) ?? [];
+    group.push(model);
+    names.set(model.name, group);
+  }
+
+  // Different deployments can advertise the same display_name while having
+  // different prices/configuration. Keep the friendly name, but add the
+  // deployment id whenever it would otherwise be ambiguous.
+  for (const group of names.values()) {
+    if (group.length > 1) {
+      for (const model of group) model.name = `${model.name} (${model.id})`;
+    }
+  }
+  return unique;
+}
+
 async function discoverModels(baseUrl: string, apiKey: string, signal?: AbortSignal) {
   const response = await fetch(`${baseUrl}/openai/models`, {
     headers: { "Api-Key": apiKey },
@@ -257,9 +286,11 @@ async function discoverModels(baseUrl: string, apiKey: string, signal?: AbortSig
   if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
   const payload: any = await response.json();
   const items = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
-  return items
-    .map((item) => modelFromItem(item, baseUrl))
-    .filter((model) => model.id);
+  return normalizeDiscoveredModels(
+    items
+      .map((item) => modelFromItem(item, baseUrl))
+      .filter((model) => model.id),
+  );
 }
 
 export default function (pi) {

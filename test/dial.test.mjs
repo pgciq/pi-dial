@@ -116,6 +116,44 @@ test("maps canonical DIAL catalog metadata without inventing tool support", asyn
   );
 });
 
+test("disambiguates equal display names and removes duplicate deployment ids", async () => {
+  await withDialEnv(
+    { DIAL_API_KEY: "test-key", DIAL_BASE_URL: "https://dial.example" },
+    async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: "gpt-a", display_name: "GPT-4", pricing: { prompt: "0.000001" } },
+              { id: "gpt-a", display_name: "GPT-4", pricing: { prompt: "0.000009" } },
+              { id: "gpt-b", display_name: "GPT-4", pricing: { prompt: "0.000002" } },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+
+      try {
+        const { config } = captureProvider();
+        const models = await config.refreshModels({
+          signal: new AbortController().signal,
+          stored: undefined,
+          publish: async () => {},
+          allowNetwork: true,
+          credential: { key: "test-key" },
+        });
+
+        assert.deepEqual(models.map((model) => model.id), ["gpt-a", "gpt-b"]);
+        assert.deepEqual(models.map((model) => model.name), ["GPT-4 (gpt-a)", "GPT-4 (gpt-b)"]);
+        assert.equal(models[0].cost.input, 1);
+        assert.equal(models[1].cost.input, 2);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+});
+
 test("sends the DIAL key without an OpenAI bearer header", async () => {
   await withDialEnv(
     {
