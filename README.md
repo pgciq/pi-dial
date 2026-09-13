@@ -7,6 +7,10 @@ Pi provider extension for [DIAL Core](https://dialx.ai/dial_api).
 ```bash
 export DIAL_BASE_URL="https://your-dial-core.example.com"
 export DIAL_API_KEY="your-api-key"
+
+# Optional deployment used by /dial-usage. If omitted, the first deployment
+# from /openai/models is used.
+export DIAL_USAGE_MODEL="gpt-4"
 ```
 
 The extension discovers deployment names from `GET /openai/models`. DIAL requests use the documented deployment endpoint:
@@ -63,7 +67,8 @@ So `pi --model dial/<vision-deployment>` can be shown images inline, while image
 ## Commands
 
 - `/dial-prices [input|output|total|context] [desc]` — list DIAL model prices per 1M tokens (sorted; `desc` reverses).
-- `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities vision` shows only vision-capable deployments.
+- `/dial-usage` — query the documented DIAL Core `/v1/deployments/{deployment}/limits` endpoint using `Api-Key` authentication. Set `DIAL_USAGE_MODEL` to choose the deployment; otherwise the first model from `/openai/models` is used. A valid `DIAL_API_KEY` is required.
+- `/dial-capabilities [image|video|audio|vision|reasoning|tools]` — list each deployment's capabilities (vision / image / video / audio / tools / reasoning). An optional filter narrows the table to deployments that support that capability, e.g. `/dial-capabilities vision` shows only DIAL deployments that support that capability.
 
 ## Install
 

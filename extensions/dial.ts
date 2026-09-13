@@ -6,6 +6,7 @@
 //   DIAL_BASE_URL  DIAL Core URL, e.g. https://dial.example.com (no /openai suffix)
 //   DIAL_MODELS    comma-separated deployment names used when model discovery is unavailable
 //   DIAL_MODEL     one deployment name (fallback for DIAL_MODELS)
+//   DIAL_USAGE_MODEL deployment to use for the limits query (defaults to the first model)
 //
 // DIAL exposes an OpenAI-compatible API, but uses deployment URLs:
 //   /openai/deployments/{deployment_name}/chat/completions
@@ -341,7 +342,7 @@ export default function (pi) {
 
   const seed = fallbackModels(baseUrl);
   if (!process.env.DIAL_API_KEY) {
-    console.error("[dial] DIAL_API_KEY is not set — discovery skipped. Set it, or set DIAL_MODELS/DIAL_MODEL, before selecting a dial/* model.");
+    console.error("[dial] DIAL_API_KEY is not configured — discovery skipped. Set it before selecting a dial/* model.");
   } else if (seed.length === 0) {
     // Key is present but no seed and no cached catalog yet: the background
     // discovery (single fast /openai/models call) will fill the catalog and
@@ -351,6 +352,7 @@ export default function (pi) {
 
   registerPricesCommand(pi);
   registerCapabilitiesCommand(pi);
+  registerUsageCommand(pi);
   registerUsageStatusBar(pi);
 }
 
@@ -380,6 +382,69 @@ function usageCost(usage: any) {
 
 function totalCost(cost: ReturnType<typeof usageCost>) {
   return cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
+}
+
+function formatUsageValue(value: unknown) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function usageMarkdown(payload: unknown) {
+  const values = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? Object.entries(payload as Record<string, unknown>)
+    : [["usage", payload]];
+  return [
+    "# DIAL usage and quota",
+    "",
+    "| Metric | Value |",
+    "|---|---|",
+    ...values.map(([key, value]) => `| ${key} | ${formatUsageValue(value).replaceAll("|", "\\|")} |`),
+  ].join("\\n");
+}
+
+async function discoverUsageDeployment(apiKey: string) {
+  const configured = process.env.DIAL_USAGE_MODEL || process.env.DIAL_MODEL || process.env.DIAL_MODELS?.split(",")[0]?.trim();
+  if (configured) return configured;
+  const baseUrl = cleanBaseUrl(process.env.DIAL_BASE_URL || DEFAULT_BASE_URL);
+  const response = await fetch(`${baseUrl}/openai/models`, {
+    headers: { "Api-Key": apiKey, Accept: "application/json" },
+    signal: withTimeout(undefined, 15_000),
+  });
+  if (!response.ok) throw new Error(`DIAL model discovery failed: HTTP ${response.status}`);
+  const payload: any = await response.json();
+  const items = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
+  const model = items.find((item) => item?.id || item?.name);
+  const deployment = String(model?.id ?? model?.name ?? "").trim();
+  if (!deployment) throw new Error("DIAL model catalog did not contain a deployment");
+  return deployment;
+}
+
+async function fetchDIALUsage() {
+  const apiKey = process.env.DIAL_API_KEY || "";
+  if (!apiKey) throw new Error("DIAL_API_KEY is not configured. Validate the DIAL token first.");
+  const deployment = await discoverUsageDeployment(apiKey);
+  const baseUrl = cleanBaseUrl(process.env.DIAL_BASE_URL || DEFAULT_BASE_URL);
+  const url = `${baseUrl}/v1/deployments/${encodeURIComponent(deployment)}/limits`;
+  const response = await fetch(url, {
+    headers: { "Api-Key": apiKey, Accept: "application/json" },
+    signal: withTimeout(undefined, 15_000),
+  });
+  if (!response.ok) throw new Error(`DIAL usage request failed: HTTP ${response.status}`);
+  return response.json();
+}
+
+function registerUsageCommand(pi) {
+  pi.registerCommand("dial-usage", {
+    description: "Show DIAL monthly usage and quota from the DIAL deployment limits API",
+    handler: async (_args, ctx) => {
+      try {
+        ctx.ui.notify(usageMarkdown(await fetchDIALUsage()), "info");
+      } catch (error) {
+        ctx.ui.notify(`DIAL usage request failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
 }
 
 function registerUsageStatusBar(pi) {
