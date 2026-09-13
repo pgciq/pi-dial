@@ -421,17 +421,64 @@ function formatUsageValue(value: unknown) {
   return String(value);
 }
 
+function usageCell(value: unknown) {
+  return formatUsageValue(value).replaceAll("|", "\\|").replaceAll("\n", " ");
+}
+
+function formatUsageLimit(value: unknown, metric: string) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  // DIAL uses Long.MAX_VALUE for an unlimited quota. It is rounded by JSON.parse
+  // in JavaScript, so compare against MAX_SAFE_INTEGER rather than the exact value.
+  return Number.isFinite(numeric) && numeric >= Number.MAX_SAFE_INTEGER
+    ? "unlimited"
+    : formatUsageMetricValue(value, metric);
+}
+
+function formatUsageMetricValue(value: unknown, metric: string) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return usageCell(value);
+  const name = metric.toLowerCase();
+  if (name.includes("cost")) return `$${numeric.toFixed(2)}`;
+  if (name.includes("token")) {
+    if (numeric >= 1_000_000) return `${(numeric / 1_000_000).toFixed(2)}M`;
+    if (numeric >= 1_000) return `${(numeric / 1_000).toFixed(2)}K`;
+    return numeric.toFixed(2);
+  }
+  return usageCell(value);
+}
+
 function usageMarkdown(payload: unknown) {
   const values = payload && typeof payload === "object" && !Array.isArray(payload)
     ? Object.entries(payload as Record<string, unknown>)
     : [["usage", payload]];
+  const hasResetAt = values.some(([, value]) =>
+    value && typeof value === "object" && !Array.isArray(value) && "resetsAt" in value && value.resetsAt,
+  );
+  const hasMonthlyWindow = values.some(([key]) => key.toLowerCase().includes("month"));
+  const rows = values.map(([key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const stats = value as Record<string, unknown>;
+      if ("used" in stats || "total" in stats || "resetsAt" in stats) {
+        const cells = `| ${usageCell(key)} | ${formatUsageMetricValue(stats.used, key)} | ${formatUsageLimit(stats.total, key)}`;
+        return hasResetAt ? `${cells} | ${usageCell(stats.resetsAt)} |` : `${cells} |`;
+      }
+    }
+    return hasResetAt
+      ? `| ${usageCell(key)} | ${usageCell(value)} |  |  |`
+      : `| ${usageCell(key)} | ${usageCell(value)} |  |`;
+  });
   return [
     "# DIAL usage and quota",
     "",
-    "| Metric | Value |",
-    "|---|---|",
-    ...values.map(([key, value]) => `| ${key} | ${formatUsageValue(value).replaceAll("|", "\\|")} |`),
-  ].join("\\n");
+    hasResetAt ? "| Metric | Used | Limit | Resets at |" : "| Metric | Used | Limit |",
+    hasResetAt ? "|---|---:|---:|---|" : "|---|---:|---:|",
+    ...rows,
+    "",
+    "_Cost values are USD; token values use K/M units._",
+    ...(hasMonthlyWindow && !hasResetAt
+      ? ["_Monthly token/cost quotas reset according to DIAL's calendar schedule._"]
+      : []),
+  ].join("\n");
 }
 
 async function discoverUsageDeployment(apiKey: string) {
@@ -470,11 +517,25 @@ function registerUsageCommand(pi) {
     description: "Show DIAL monthly usage and quota from the DIAL deployment limits API",
     handler: async (_args, ctx) => {
       try {
-        ctx.ui.notify(usageMarkdown(await fetchDIALUsage()), "info");
+        const markdown = usageMarkdown(await fetchDIALUsage());
+        if (ctx.mode === "tui") {
+          pi.appendEntry("dial-usage", { markdown });
+        } else if (ctx.hasUI) {
+          ctx.ui.notify(markdown, "info");
+        } else {
+          console.log(markdown);
+        }
       } catch (error) {
-        ctx.ui.notify(`DIAL usage request failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        const message = `DIAL usage request failed: ${error instanceof Error ? error.message : String(error)}`;
+        if (ctx.hasUI) ctx.ui.notify(message, "error");
+        else console.error(message);
       }
     },
+  });
+
+  pi.registerEntryRenderer("dial-usage", (entry) => {
+    const mdTheme = getMarkdownTheme();
+    return new Markdown(entry.data.markdown, 1, 0, mdTheme);
   });
 }
 
