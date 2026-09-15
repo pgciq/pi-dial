@@ -15,7 +15,7 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 
 const DEFAULT_BASE_URL = "https://ai-proxy.lab.epam.com";
 const PROVIDER_ID = "dial";
