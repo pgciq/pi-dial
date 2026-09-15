@@ -15,6 +15,7 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
 // `openAICompletionsApi` lives on the bare `@earendil-works/pi-ai` export in
 // older pi-ai builds but moved to the `@earendil-works/pi-ai/api/openai-completions.lazy`
