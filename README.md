@@ -4,9 +4,19 @@ Pi provider extension for [DIAL Core](https://dialx.ai/dial_api).
 
 ## Configuration
 
+In interactive Pi, store the DIAL API key with:
+
+```text
+/login dial
+```
+
+Pi persists it in `~/.pi/agent/auth.json`. The legacy environment variable is
+still accepted as a fallback, but is no longer required:
+
 ```bash
 export DIAL_BASE_URL="https://your-dial-core.example.com"
-export DIAL_API_KEY="your-api-key"
+# Optional fallback only:
+# export DIAL_API_KEY="your-api-key"
 
 # Optional deployment used by /dial-usage. If omitted, the first deployment
 # from /openai/models is used.
@@ -45,9 +55,8 @@ Live model discovery runs **in the background** via pi's `refreshModels` callbac
 - When network is allowed, `GET /openai/models` is fetched with an 8s per-request timeout; on success the discovered list is persisted to pi's provider cache (`publish({ persist })`) and hot-swaps the catalog.
 - On failure it keeps the previous list, so the user is never left without models.
 
-`DIAL_API_KEY` is required for discovery; without it (or with `DIAL_MODELS` set) the seed list is used directly.
-
-**About large catalogs (100+ deployments):** discovery is a *single* `GET /openai/models` call — all deployments arrive in one response, so it is one fast, 8s-capped request, not 100 sequential ones. On the **first** run with no cache the catalog fills in that one background call; the result is then persisted to pi's provider cache, so **every subsequent start shows all 100+ models instantly** (from cache) and only re-validates in the background. If you pick a `dial/*` model in the brief first-run window before discovery finishes, set `DIAL_MODELS` for your common deployments (instant, no network needed) or just run `/reload` a moment later.
+If DIAL returns HTTP 401 or 403, Pi reports that the key may be expired or
+invalid and suggests running `/login dial` to replace the stored credential.
 
 ## What DIAL Core exposes (capabilities)
 

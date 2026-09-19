@@ -23,8 +23,8 @@ function captureProvider() {
   let registered;
   const noop = () => {};
   registerDial({
-    registerProvider: (id, config) => {
-      registered = { id, config };
+    registerProvider: (...args) => {
+      registered = args.length === 1 ? args[0] : { id: args[0], config: args[1] };
     },
     registerCommand: noop,
     registerEntryRenderer: noop,
@@ -42,15 +42,15 @@ test("registers configured fallback deployments immediately", async () => {
       DIAL_MODELS: "first-model, gemini-3.8-flash",
     },
     () => {
-      const { id, config } = captureProvider();
+      const provider = captureProvider();
 
-      assert.equal(id, "dial");
+      assert.equal(provider.id, "dial");
       assert.deepEqual(
-        config.models.map((model) => model.id),
+        provider.getModels().map((model) => model.id),
         ["first-model", "gemini-3.8-flash"],
       );
       assert.equal(
-        config.models[1].baseUrl,
+        provider.getModels()[1].baseUrl,
         "https://dial.example/openai/deployments/gemini-3.8-flash",
       );
     },
@@ -87,9 +87,9 @@ test("maps canonical DIAL catalog metadata without inventing tool support", asyn
       };
 
       try {
-        const { config } = captureProvider();
+        const config = captureProvider();
         let persisted;
-        const models = await config.refreshModels({
+        await config.refreshModels({
           signal: new AbortController().signal,
           stored: undefined,
           publish: async (entry) => {
@@ -99,6 +99,7 @@ test("maps canonical DIAL catalog metadata without inventing tool support", asyn
           credential: { key: "test-key" },
         });
 
+        const models = config.getModels();
         assert.equal(requestedUrl, "https://dial.example/openai/models");
         assert.equal(requestedHeaders.get("Api-Key"), "test-key");
         assert.equal(models[0].name, "Chat model");
@@ -134,8 +135,8 @@ test("disambiguates equal display names and removes duplicate deployment ids", a
         );
 
       try {
-        const { config } = captureProvider();
-        const models = await config.refreshModels({
+        const config = captureProvider();
+        await config.refreshModels({
           signal: new AbortController().signal,
           stored: undefined,
           publish: async () => {},
@@ -143,6 +144,7 @@ test("disambiguates equal display names and removes duplicate deployment ids", a
           credential: { key: "test-key" },
         });
 
+        const models = config.getModels();
         assert.deepEqual(models.map((model) => model.id), ["gpt-a", "gpt-b"]);
         assert.deepEqual(models.map((model) => model.name), ["GPT-4 (gpt-a)", "GPT-4 (gpt-b)"]);
         assert.equal(models[0].cost.input, 1);
@@ -162,8 +164,8 @@ test("sends the DIAL key without an OpenAI bearer header", async () => {
       DIAL_MODEL: "chat-model",
     },
     async () => {
-      const { config } = captureProvider();
-      const model = { ...config.models[0], provider: "dial" };
+      const config = captureProvider();
+      const model = { ...config.getModels()[0], provider: "dial" };
       let requestedUrl;
       let requestedHeaders;
 

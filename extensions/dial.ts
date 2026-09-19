@@ -1,7 +1,8 @@
 // DIAL Core provider — https://dialx.ai/dial_api
 //
-// Required:
-//   DIAL_API_KEY   API key (sent in the DIAL-specific Api-Key header)
+// Authentication:
+//   Use `/login dial` to store the key in Pi's ~/.pi/agent/auth.json.
+//   DIAL_API_KEY remains supported as a backwards-compatible fallback.
 // Optional:
 //   DIAL_BASE_URL  DIAL Core URL, e.g. https://dial.example.com (no /openai suffix)
 //   DIAL_MODELS    comma-separated deployment names used when model discovery is unavailable
@@ -22,6 +23,22 @@ const PROVIDER_ID = "dial";
 
 function cleanBaseUrl(value: string) {
   return value.replace(/\/+$/, "");
+}
+
+function dialAuthError(status: number, statusText: string) {
+  if (status === 401 || status === 403) {
+    return new Error(
+      `DIAL API key was rejected (HTTP ${status}${statusText ? ` ${statusText}` : ""}). The key may be expired or invalid; run /login dial to update it.`,
+    );
+  }
+  return undefined;
+}
+
+async function fetchDial(url: string | URL, init?: RequestInit, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(url, init);
+  const authError = dialAuthError(response.status, response.statusText);
+  if (authError) throw authError;
+  return response;
 }
 
 function deploymentUrl(baseUrl: string, id: string) {
@@ -268,7 +285,7 @@ function normalizeDiscoveredModels(models: any[]) {
 }
 
 async function discoverModels(baseUrl: string, apiKey: string, signal?: AbortSignal) {
-  const response = await fetch(`${baseUrl}/openai/models`, {
+  const response = await fetchDial(`${baseUrl}/openai/models`, {
     headers: { "Api-Key": apiKey },
     redirect: "follow",
     signal: withTimeout(signal, 8000),
@@ -297,6 +314,9 @@ export default function (pi) {
       // `Authorization: Bearer` for OAuth tokens, so remove the generated header.
       return openAICompletionsApi().streamSimple(model, context, {
         ...options,
+        // Keep the DIAL-specific header behavior and turn an expired/revoked
+        // key into an actionable error visible in Pi's stream error UI.
+        fetch: (url, init) => fetchDial(url, init, options?.fetch ?? globalThis.fetch),
         headers: { ...options?.headers, Authorization: null },
       });
     }
@@ -320,51 +340,61 @@ export default function (pi) {
     return stream;
   }
 
-  // Register immediately with the seed/fallback list (DIAL_MODELS/DIAL_MODEL or
-  // empty) so Pi is usable the instant the extension loads. Live model discovery
-  // runs in the background via refreshModels and never blocks startup.
-  pi.registerProvider(PROVIDER_ID, {
+  // Register immediately with the seed/fallback list. The auth definition makes
+  // `/login dial` persist the key in Pi's auth.json; the environment variable is
+  // intentionally retained only as a compatibility fallback.
+  let currentModels = fallbackModels(baseUrl);
+  const provider = {
+    id: PROVIDER_ID,
     name: "DIAL",
-    // The actual endpoint is model-specific; this value is used only as a fallback.
     baseUrl: `${baseUrl}/openai/deployments`,
-    api: "openai-completions",
-    apiKey: "$DIAL_API_KEY",
-    headers: { "Api-Key": "$DIAL_API_KEY" },
-    models: fallbackModels(baseUrl),
-    // Capability-aware streaming: image/video deployments are routed to DIAL's
-    // generation endpoints; chat deployments use OpenAI completions.
-    streamSimple: streamDial,
-
-    async refreshModels({ signal, stored, publish, allowNetwork, credential }) {
+    auth: {
+      apiKey: {
+        name: "DIAL API Key",
+        async login(interaction) {
+          const key = await interaction.prompt({ type: "secret", message: "DIAL API Key" });
+          if (!key.trim()) throw new Error("DIAL API Key cannot be empty");
+          return { type: "api_key", key: key.trim() };
+        },
+        async resolve({ credential, ctx }) {
+          const key = credential?.key ?? await ctx.env("DIAL_API_KEY");
+          return key
+            ? {
+                auth: { apiKey: key, headers: { "Api-Key": key } },
+                source: credential?.key ? "stored DIAL API key" : "DIAL_API_KEY",
+              }
+            : undefined;
+        },
+      },
+    },
+    getModels: () => currentModels,
+    async refreshModels({ signal, stored, allowNetwork, credential, publish }) {
       const cached = Array.isArray(stored?.models) ? stored.models : undefined;
       const seed = fallbackModels(baseUrl);
-      // Pi's cache-only startup phase, or a cancelled refresh: return what we
-      // already have without touching the network.
-      if (allowNetwork === false || signal?.aborted) return cached?.length ? cached : seed;
-
+      if (cached?.length) currentModels = cached;
+      if (allowNetwork === false || signal?.aborted) return currentModels;
       const apiKey = credential?.key ?? process.env.DIAL_API_KEY ?? "";
-      if (!apiKey) return cached?.length ? cached : seed;
-
-      // Single GET /openai/models call returns all deployments (100+ in one
-      // response) — fast, and the result is cached for instant startup next time.
+      if (!apiKey) return currentModels;
       console.error(`[dial] Discovering model catalog from ${baseUrl}/openai/models ...`);
       try {
         const discovered = await discoverModels(baseUrl, apiKey, signal);
         if (discovered.length > 0) {
+          currentModels = discovered;
           await publish({ persist: { provider: PROVIDER_ID, models: discovered } });
           return discovered;
         }
       } catch (error) {
         console.error(`[dial] Model discovery failed (${error instanceof Error ? error.message : String(error)}). Keeping previous list.`);
       }
-      return cached?.length ? cached : seed;
+      return currentModels.length ? currentModels : seed;
     },
-  });
+    stream: streamDial,
+    streamSimple: streamDial,
+  };
+  pi.registerProvider(provider);
 
   const seed = fallbackModels(baseUrl);
-  if (!process.env.DIAL_API_KEY) {
-    console.error("[dial] DIAL_API_KEY is not configured — discovery skipped. Set it before selecting a dial/* model.");
-  } else if (seed.length === 0) {
+  if (seed.length === 0) {
     // Key is present but no seed and no cached catalog yet: the background
     // discovery (single fast /openai/models call) will fill the catalog and
     // cache it. Surface this so an immediate model pick doesn't just error.
@@ -475,7 +505,7 @@ async function discoverUsageDeployment(apiKey: string) {
   const configured = process.env.DIAL_USAGE_MODEL || process.env.DIAL_MODEL || process.env.DIAL_MODELS?.split(",")[0]?.trim();
   if (configured) return configured;
   const baseUrl = cleanBaseUrl(process.env.DIAL_BASE_URL || DEFAULT_BASE_URL);
-  const response = await fetch(`${baseUrl}/openai/models`, {
+  const response = await fetchDial(`${baseUrl}/openai/models`, {
     headers: { "Api-Key": apiKey, Accept: "application/json" },
     signal: withTimeout(undefined, 15_000),
   });
@@ -494,7 +524,7 @@ async function fetchDIALUsage() {
   const deployment = await discoverUsageDeployment(apiKey);
   const baseUrl = cleanBaseUrl(process.env.DIAL_BASE_URL || DEFAULT_BASE_URL);
   const url = `${baseUrl}/v1/deployments/${encodeURIComponent(deployment)}/limits`;
-  const response = await fetch(url, {
+  const response = await fetchDial(url, {
     headers: { "Api-Key": apiKey, Accept: "application/json" },
     signal: withTimeout(undefined, 15_000),
   });
