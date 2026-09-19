@@ -43,14 +43,15 @@ test("registers configured fallback deployments immediately", async () => {
     },
     () => {
       const provider = captureProvider();
+      const config = provider.config;
 
       assert.equal(provider.id, "dial");
       assert.deepEqual(
-        provider.getModels().map((model) => model.id),
+        config.models.map((model) => model.id),
         ["first-model", "gemini-3.8-flash"],
       );
       assert.equal(
-        provider.getModels()[1].baseUrl,
+        config.models[1].baseUrl,
         "https://dial.example/openai/deployments/gemini-3.8-flash",
       );
     },
@@ -87,7 +88,8 @@ test("maps canonical DIAL catalog metadata without inventing tool support", asyn
       };
 
       try {
-        const config = captureProvider();
+        const provider = captureProvider();
+        const config = provider.config;
         let persisted;
         await config.refreshModels({
           signal: new AbortController().signal,
@@ -135,7 +137,8 @@ test("disambiguates equal display names and removes duplicate deployment ids", a
         );
 
       try {
-        const config = captureProvider();
+        const provider = captureProvider();
+        const config = provider.config;
         await config.refreshModels({
           signal: new AbortController().signal,
           stored: undefined,
@@ -164,8 +167,9 @@ test("sends the DIAL key without an OpenAI bearer header", async () => {
       DIAL_MODEL: "chat-model",
     },
     async () => {
-      const config = captureProvider();
-      const model = { ...config.getModels()[0], provider: "dial" };
+      const provider = captureProvider();
+      const config = provider.config;
+      const model = { ...config.models[0], provider: "dial" };
       let requestedUrl;
       let requestedHeaders;
 

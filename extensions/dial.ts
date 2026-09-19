@@ -348,25 +348,6 @@ export default function (pi) {
     id: PROVIDER_ID,
     name: "DIAL",
     baseUrl: `${baseUrl}/openai/deployments`,
-    auth: {
-      apiKey: {
-        name: "DIAL API Key",
-        async login(interaction) {
-          const key = await interaction.prompt({ type: "secret", message: "DIAL API Key" });
-          if (!key.trim()) throw new Error("DIAL API Key cannot be empty");
-          return { type: "api_key", key: key.trim() };
-        },
-        async resolve({ credential, ctx }) {
-          const key = credential?.key ?? await ctx.env("DIAL_API_KEY");
-          return key
-            ? {
-                auth: { apiKey: key, headers: { "Api-Key": key } },
-                source: credential?.key ? "stored DIAL API key" : "DIAL_API_KEY",
-              }
-            : undefined;
-        },
-      },
-    },
     getModels: () => currentModels,
     async refreshModels({ signal, stored, allowNetwork, credential, publish }) {
       const cached = Array.isArray(stored?.models) ? stored.models : undefined;
@@ -391,7 +372,16 @@ export default function (pi) {
     stream: streamDial,
     streamSimple: streamDial,
   };
-  pi.registerProvider(provider);
+  pi.registerProvider(provider.id, {
+    ...provider,
+    api: "openai-completions",
+    models: provider.getModels(),
+    apiKey: "$DIAL_API_KEY",
+    headers: { "Api-Key": "$DIAL_API_KEY" },
+    streamSimple: provider.streamSimple,
+    models: provider.getModels(),
+    refreshModels: provider.refreshModels,
+  });
 
   const seed = fallbackModels(baseUrl);
   if (seed.length === 0) {
